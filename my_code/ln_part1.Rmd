@@ -1,0 +1,161 @@
+---
+title: "Part 1: Time series wrangling & forecasting"
+author: "Larissa Neilson"
+date: "2/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE)
+
+library(tidyverse)
+library(tsibble)
+library(feasts)
+library(fable)
+library(here)
+library(broom)
+```
+
+### Read in energy data and convert to a tsibble
+
+```{r}
+energy <- read_csv(here("data", "energy.csv"))
+
+# Wrangle data to get proper date column
+energy_ts <- energy %>% 
+  mutate(date = yearmonth(month)) %>% 
+  as_tsibble(key = NULL, index = date)
+```
+
+### Exploratory time series visualization
+
+#### Raw data ggplot
+
+```{r}
+ggplot(data = energy_ts, aes(x = date, y = res_total)) +
+  geom_line() +
+  labs(y = "Residential energy consumption \n (Trillion BTU)")
+```
+
+- Overall increasing trend, but stability (and possibly a slight decreasing trend) starting around 2005
+- Clear seasonality, with a dominant seasonal feature and also a secondary peak each year - that secondary peak has increased substantially
+- No notable cyclicality or outliers
+
+#### Seasonplot
+
+```{r}
+energy_ts %>% 
+  gg_season(y = res_total) +
+  theme_minimal() +
+  labs(x = "month", y = "residential energy consumption (trillion BTU)")
+```
+
+- The highest residential energy usage is around December / January / February
+- There is a secondary peak around July & August (that’s the repeated secondary peak we see in the original time series graph)
+- We can also see that the prevalence of that second peak has been increasing over the course of the time series: in 1973 (orange) there was hardly any summer peak. In more recent years (blue/magenta) that peak is much more prominent.
+
+#### Subseries plot
+
+```{r}
+energy_ts %>% 
+  gg_subseries(res_total)
+```
+
+- There is clear seasonality (higher values in winter months), with an increasingly evident second peak in June/July/August. This reinforces our takeaways from the raw data and seasonplots.
+
+#### Decomposition (by STL)
+
+```{r}
+# Find STL decomposition
+dcmp <- energy_ts %>% 
+  model(STL(res_total ~  season()))
+
+# Visualize the decomposed components
+components(dcmp) %>% 
+  autoplot() +
+  theme_minimal()
+```
+
+#### Autocorrelation function (ACF)
+
+```{r}
+energy_ts %>% 
+  ACF(res_total) %>%
+  autoplot()
+```
+
+- Observations separated by 12 months are the most highly correlated, reflecting strong seasonality we see in all of our other exploratory visualizations.
+
+### Forecasting by Holt-Winters exponential smoothing
+
+```{r}
+# Create the model:
+energy_fit <- energy_ts %>% 
+  model(
+    ets = ETS(res_total ~ season("M"))
+  )
+
+# Forecast using the model 10 years into the future:
+energy_forecast <- energy_fit %>% 
+  forecast(h = "10 years")
+
+# Plot just the forecasted values (with 80 & 95% CIs):
+energy_forecast %>% 
+  autoplot()
+
+# Or plot it added to the original data:
+energy_forecast %>% 
+  autoplot(energy_ts)
+```   
+
+#### Assessing residuals
+
+```{r}
+# Append the predicted values (and residuals) to original energy data
+energy_predicted <- augment(energy_fit)
+
+# Now plot the actual energy values (res_total), and the predicted values (stored as .fitted) atop them:
+ggplot(data = energy_predicted) +
+  geom_line(aes(x = date, y = res_total)) +
+  geom_line(aes(x = date, y = .fitted, color = "pink"))
+```
+
+Explore the residuals  next.
+Some important considerations: Residuals should be uncorrelated, centered at 0, and ideally normally distributed. One way we can check the distribution is with a histogram:
+
+```{r}
+ggplot(data = energy_predicted, aes(x = .resid)) +
+  geom_histogram()
+```
+
+Relatively normally distributed, and centered at 0 (we could find summary statistics beyond this to further explore)
+
+### Other forecasting methods
+
+ETS forecasting, seasonal naive (SNAIVE) and autoregressive integrated moving average (ARIMA)
+
+```{r}
+# Fit 3 different forecasting models (ETS, ARIMA, SNAIVE):
+energy_fit_multi <- energy_ts %>% 
+  model(
+    ets = ETS(res_total ~ season("M")),
+    arima = ARIMA(res_total),
+    snaive = SNAIVE(res_total)
+  )
+
+# Forecast 3 years into the future (from data end date)
+multi_forecast <- energy_fit_multi %>% 
+  forecast(h = "3 years")
+
+# Plot the 3 forecasts
+multi_forecast %>% 
+  autoplot(energy_ts)
+
+# Or just view the  forecasts (not the similarity across models):
+multi_forecast %>% 
+  autoplot()
+```
+

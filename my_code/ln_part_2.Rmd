@@ -1,0 +1,125 @@
+---
+title: 'Part 2: Spatial data wrangling, visualization, and a variogram'
+author: "Larissa Neilson"
+date: "2/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE)
+
+library(tidyverse)
+library(here)
+library(sf)
+library(tmap)
+```
+
+### California county lines (polygons)
+
+#### Read it in with `read_sf`
+
+```{r}
+ca_counties <- read_sf(here("data", "ca_counties", "CA_Counties_TIGER2016.shp"))
+```
+
+#### Do a bit of wrangling (and see sticky geometry!)
+
+```{r}
+ca_subset <- ca_counties %>% 
+  select(NAME, ALAND) %>% 
+  rename(county_name = NAME, land_area = ALAND)
+```
+
+#### Check and set the CRS
+
+```{r}
+# Use st_crs() to check the existing CRS for spatial data. We see that this CRS is WGS84 (epsg: 3857)
+
+ca_subset %>% 
+  st_crs()
+```
+
+#### Look at it
+
+```{r}
+ggplot(data = ca_subset) +
+  geom_sf(aes(fill = land_area), color = "white", size = 0.1) +
+  theme_void() +
+  scale_fill_gradientn(colors = c("cyan", "blue", "purple"))
+```
+
+### Invasive red sesbania records (spatial points)
+
+```{r}
+sesbania <- read_sf(here("data", "red_sesbania", "ds80.shp"))
+
+# Check the CRS:
+sesbania %>% 
+  st_crs()
+```
+
+```{r}
+# Update CRS to match sfs
+sesbania <- st_transform(sesbania, 3857)
+
+# Then check
+sesbania %>% st_crs()
+```
+
+#### Plot them together!
+
+```{r}
+ggplot() +
+  geom_sf(data = ca_subset) +
+  geom_sf(data = sesbania, size = 1, color = "red")
+```
+
+#### A bit of wrangling
+
+```{r}
+# Do a spatial join to find the count of red sesbania observed locations in this dataset by county
+ca_sesbania <- ca_subset %>% 
+  st_join(sesbania)
+
+# Now we can find counts
+sesbania_counts <- ca_sesbania %>% 
+  count(county_name)
+
+# Plot a chloropleth using the number of records for red sesbania as the fill color
+ggplot(data = sesbania_counts) +
+  geom_sf(aes(fill = n), color = "white", size = 0.1) +
+  scale_fill_gradientn(colors = c("lightgray", "orange", "red")) +
+  labs(fill = "Number of S. punicea records")
+```
+
+```{r}
+# Subset of sesbania point locations only in Solano County
+solano_sesbania <- sesbania %>% 
+  filter(COUNTY == "Solano")
+
+# Only keep Solano polygon from California County data
+solano <- ca_subset %>% 
+  filter(county_name == "Solano")
+
+ggplot() +
+  geom_sf(data = solano) +
+  geom_sf(data = solano_sesbania)
+```
+
+### Making an interactive map with {tmap}
+
+```{r}
+# Set the viewing mode to "interactive"
+tmap_mode(mode = "view")
+
+# Then make a map (with the polygon fill color updated by variable 'land_area', updating the color palette to "BuGn"), then add another shape layer for the sesbania records (added as dots):
+tm_shape(ca_subset) +
+  tm_fill("land_area", palette = "BuGn") +
+  tm_shape(sesbania) +
+  tm_dots()
+```
+
+
